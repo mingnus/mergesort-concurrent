@@ -12,59 +12,72 @@ struct {
     int cut_thread_count;
 } data_context;
 
-static llist_t *tmp_list;
-static llist_t *the_list = NULL;
+static struct list_head *tmp_list;
+static struct list_head *the_list = NULL;
 
 static int thread_count = 0, data_count = 0, max_cut = 0;
 static tpool_t *pool = NULL;
 
-llist_t *merge_list(llist_t *a, llist_t *b)
+struct list_head *merge_list(struct list_head *list1, struct list_head *list2,
+                             int (*cmp)(struct list_head *, struct list_head *))
 {
-    llist_t *_list = list_new();
-    node_t *current = NULL;
-    while (a->size && b->size) {
-        llist_t *small = (llist_t *)
-                         ((intptr_t) a * (a->head->data <= b->head->data) +
-                          (intptr_t) b * (a->head->data > b->head->data));
-        if (current) {
-            current->next = small->head;
-            current = current->next;
+    struct list_head *merged = malloc(sizeof(struct list_head));
+    struct list_head *tail = &merged;
+    INIT_LIST_HEAD(&merged);
+
+    struct list_head *iter1 = list1->next;
+    struct list_head *iter2 = list2->next;
+
+    while (iter1 != list1 && iter2 != list2) {
+        if (cmp(iter1, iter2) <= 0) {
+            tail->next = iter1;
+            iter1->prev = tail;
+            iter1 = iter1->next;
         } else {
-            _list->head = small->head;
-            current = _list->head;
+            tail->next = iter2;
+            iter2->prev = tail;
+            iter2 = iter2->next;
         }
-        small->head = small->head->next;
-        --small->size;
-        ++_list->size;
-        current->next = NULL;
     }
 
-    llist_t *remaining = (llist_t *) ((intptr_t) a * (a->size > 0) +
-                                      (intptr_t) b * (b->size > 0));
-    if (current) current->next = remaining->head;
-    _list->size += remaining->size;
-    free(a);
-    free(b);
-    return _list;
+    tail->next = iter1 != list1 ? iter1 : iter2;
+    tail->next->prev = tail;
+    tail = tail->next;
+    while (tail->next != list1 && tail->next != list2)
+        tail = tail->next;
+
+    tail->next = merged;
+    merged->prev = tail;
+
+    free(list1);
+    free(list2);
+
+    return merged;
 }
 
-llist_t *merge_sort(llist_t *list)
+struct list_head *merge_sort(struct list_head *list)
 {
-    if (list->size < 2)
+    if (list_is_singular(list))
         return list;
-    int mid = list->size / 2;
-    llist_t *left = list;
-    llist_t *right = list_new();
-    right->head = list_nth(list, mid);
-    right->size = list->size - mid;
-    list_nth(list, mid - 1)->next = NULL;
-    left->size = mid;
+
+    struct list_head *left = list;
+    struct list_head *right = malloc(sizeof(struct list_head));
+
+    /* similar to __list_cut_position() */
+    list_head *new_first = list_get_middle(list);
+    right->next = new_first;
+    right->prev = left->prev;
+    right->prev->next = right;
+    left->prev = new_first->prev;
+    left->prev->next = left;
+    new_first->prev = right;
+
     return merge_list(merge_sort(left), merge_sort(right));
 }
 
 void merge(void *data)
 {
-    llist_t *_list = (llist_t *) data;
+    struct list_head *_list = (struct list_head *)data;
     if (_list->size < (uint32_t) data_count) {
         pthread_mutex_lock(&(data_context.mutex));
         llist_t *_t = tmp_list;
